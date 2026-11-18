@@ -26,6 +26,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orbita-update-'));
 const install = path.join(root, 'installed');
 const profile = path.join(root, 'profile');
 const archive = path.join(install, 'resources', 'app.asar');
+const trace = path.join(root, 'updater.log');
 const run = promisify(execFile);
 const filename = value => `Orbita-Instalar-${value}.exe`;
 const env = { ...process.env, ORBITA_DATA_DIR: profile, ORBITA_TEST: '0' };
@@ -76,25 +77,35 @@ async function verifyUpdate() {
     });
     return result.tasks[0];
   });
-  await running.evaluate(({ app, dialog }, directory) => {
+  await running.evaluate(({ app, dialog }, logFile) => {
+    const { appendFileSync } = process.getBuiltinModule('node:fs');
+    const childProcess = process.getBuiltinModule('node:child_process');
+    const log = text => appendFileSync(logFile, String(text) + '\n', 'utf8');
     const requireApp = process.getBuiltinModule('node:module').createRequire(app.getAppPath() + '/package.json');
     const { autoUpdater } = requireApp('electron-updater');
-    autoUpdater.installDirectory = directory;
+    autoUpdater.logger = { info: log, warn: log, error: log, debug: log };
     autoUpdater.disableDifferentialDownload = true;
+    const spawn = childProcess.spawn;
+    childProcess.spawn = (...args) => {
+      const child = spawn(...args);
+      if (args[1]?.includes('--updated')) child.once('spawn', () => log('Installer PID: ' + child.pid));
+      return child;
+    };
     const install = autoUpdater.quitAndInstall.bind(autoUpdater);
     // Keep the real download, checksum and NSIS install. The test relaunches
     // the new binary itself, so it can inspect the renderer after installation.
     autoUpdater.quitAndInstall = () => install(true, false);
-    dialog.showMessageBox = async () => ({ response: 1 });
-  }, install);
+    dialog.showMessageBox = async () => { log('Installer confirmed'); return { response: 1 }; };
+    app.on('before-quit', () => log('Old process is quitting'));
+  }, trace);
   await page.evaluate(() => window.orbita.update('check'));
   await page.waitForFunction(async () => (await window.orbita.read()).runtime.update.status === 'available');
   const ready = await page.evaluate(() => window.orbita.update('download'));
   assert.equal(ready.status, 'ready');
   assert.equal(ready.version, version);
-  await page.evaluate(() => window.orbita.update('install')).catch(() => {});
+  await page.evaluate(() => window.orbita.update('install')).catch(error => console.log(error.message));
 
-  const deadline = Date.now() + 120000;
+  const deadline = Date.now() + 45000;
   for (;;) {
     let installed;
     try { installed = installedVersion(); } catch { /* NSIS may be replacing files. */ }
@@ -117,6 +128,7 @@ async function verifyUpdate() {
 
 verifyUpdate().catch(error => {
   console.error(error);
+  if (fs.existsSync(trace)) console.error(fs.readFileSync(trace, 'utf8'));
   process.exitCode = 1;
 }).finally(async () => {
   if (running) await running.close().catch(() => {});
