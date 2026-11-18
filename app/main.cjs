@@ -7,6 +7,7 @@ const {randomUUID}=require('node:crypto');
 const {Store,validateBackup,clean,today,dueReminders,setBudget,COLLECTIONS}=require('./core.cjs');
 const {parseTransactions}=require('./finance.cjs');
 const {createUpdates}=require('./updates.cjs');
+const {BackupLocation}=require('./backup-location.cjs');
 const APP_ID='br.local.orbita.organizador';
 const testMode=process.env.ORBITA_TEST==='1';
 app.setName('Órbita');
@@ -16,6 +17,8 @@ fs.mkdirSync(app.getPath('userData'),{recursive:true});
 protocol.registerSchemesAsPrivileged([{scheme:'orbita',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 let win,tray,store,quitting=false,closeHint=false;
 let updates, quickCapture = false;
+let backupLocation;
+const reminderNotices = new Map();
 let lastMaintenanceDay;
 const icon=path.join(__dirname,'../assets/icon.png');
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -27,10 +30,11 @@ else {
   app.whenReady().then(async()=>{
     try {store=new Store(app.getPath('userData'));}
     catch(e){dialog.showErrorBox('Órbita • dados preservados',e.message+'\n\nPasta: '+app.getPath('userData'));app.quit();return;}
+    backupLocation = new BackupLocation(store);
     protocol.handle('orbita',request=>{
       const url=new URL(request.url);
       if(url.hostname!=='app')return new Response('Não encontrado',{status:404});
-      const allowed=['/index.html','/styles.css','/dates.js','/renderer.js','/editor.js','/organizer.js','/actions.js'];
+      const allowed=['/index.html','/styles.css','/dates.js','/renderer.js','/editor.js','/organizer.js','/planning.js','/forecast.js','/actions.js'];
       if(!allowed.includes(url.pathname))return new Response('Não encontrado',{status:404});
       return net.fetch(pathToFileURL(path.join(__dirname,url.pathname.slice(1))).toString());
     });
@@ -79,21 +83,72 @@ function startupEnabled(){
   const login=app.getLoginItemSettings({path:process.execPath});
   return login.executableWillLaunchAtLogin && login.launchItems.some(item=>item.name==='Orbita'&&item.enabled);
 }
-function snapshot(){return {...store.data,runtime:{version:app.getVersion(),packaged:app.isPackaged,dataPath:app.getPath('userData'),startup:startupEnabled(),quickCapture,update:updates?.state() || {status:'unavailable'}}};}
+function snapshot(){return {...store.data,runtime:{version:app.getVersion(),packaged:app.isPackaged,dataPath:app.getPath('userData'),backupPath:backupLocation.directory(),startup:startupEnabled(),quickCapture,update:updates?.state() || {status:'unavailable'}}};}
 function notify(title,body){
   if(testMode){changed(`Lembrete: ${title}`);return;}
   if(store.data.settings.notifications && Notification.isSupported()){
     const n=new Notification({title,body,icon,timeoutType:'default'});n.on('click',()=>show());n.show();
   }
 }
+
+function notifyReminder(kind, item, deliveredAt) {
+  const title = kind === 'tasks' ? 'Lembrete de tarefa' : 'Lembrete de compromisso';
+  if (testMode) { changed(`Lembrete: ${item.title}`); return; }
+  if (!Notification.isSupported()) return;
+
+  const key = `${kind}:${item.id}`;
+  const open = () => {
+    show();
+    win.webContents.send('open-record', { kind, id: item.id });
+  };
+  const actions = [
+    ['Adiar 10 min', () => {
+      if (store.snoozeReminder(kind, item.id, Date.now() + 600000, deliveredAt)) changed('Lembrete adiado por 10 minutos.');
+    }],
+    kind === 'tasks' ? ['Concluir tarefa', () => {
+      const current = store.data.tasks.find(task => task.id === item.id);
+      if (current?.reminder && !current.done && current.notifiedAt === deliveredAt && !current.snoozedUntil) {
+        store.upsert('tasks', { ...current, done: true });
+        changed('Tarefa concluída.');
+      }
+    }] : ['Abrir compromisso', open]
+  ];
+  reminderNotices.get(key)?.notice.close();
+  const notice = new Notification({
+    title, body: item.title, icon,
+    actions: actions.map(([text]) => ({ type: 'button', text }))
+  });
+  const release = () => {
+    if (reminderNotices.get(key)?.notice === notice) reminderNotices.delete(key);
+  };
+  notice.on('click', () => { release(); open(); });
+  notice.on('action', (event, legacyIndex) => {
+    release();
+    try { actions[event?.actionIndex ?? legacyIndex]?.[1](); }
+    catch (error) { show(); changed(error.message); }
+  });
+  notice.on('failed', (_event, error) => {
+    release();
+    console.error('Falha na notificação:', error);
+  });
+  reminderNotices.set(key, { notice, createdAt: Date.now() });
+  notice.show();
+}
+
+function backupToday(day = today()) {
+  try { store.dailyBackup(day); }
+  catch (error) { console.error('Falha no backup automático:', error.message); changed('O backup local falhou. Confira a pasta de dados.'); }
+  try { backupLocation.daily(day); }
+  catch (error) { console.error('Falha no backup externo:', error.message); changed('A cópia externa falhou. Confira a pasta escolhida em Configurações.'); }
+}
+
 let lastReminderCheck=0;
 function tick(){
   try{
     const day = today();
     if (lastMaintenanceDay !== day) {
       if (store.repeatTransactions(day)) changed();
-      try { store.dailyBackup(day); }
-      catch (error) { console.error('Falha no backup automático:', error.message); changed('O backup automático falhou. Confira a pasta de dados.'); }
+      backupToday(day);
       lastMaintenanceDay = day;
     }
     const f=store.data.focus;
@@ -103,12 +158,25 @@ function tick(){
     }
     if(Date.now()-lastReminderCheck>=15000){
       lastReminderCheck=Date.now();
+      for (const [key, entry] of reminderNotices) {
+        if (lastReminderCheck - entry.createdAt > 86400000) {
+          entry.notice.close();
+          reminderNotices.delete(key);
+        }
+      }
       if(!store.data.settings.notifications)return;
       const due=dueReminders(store.data);
       if(due.length){
-        store.change(data=>{for(const {kind,item} of due)data[kind].find(x=>x.id===item.id).notifiedAt=new Date().toISOString();});
-        if(due.length>3)notify(`${due.length} lembretes no Órbita`,'Abra o aplicativo para conferir suas tarefas e compromissos.');
-        else for(const {kind,item} of due)notify(kind==='tasks'?'Hora da tarefa':'Compromisso agora',item.title);
+        const deliveredAt = new Date(lastReminderCheck).toISOString();
+        const batch = due.slice(0, 3);
+        store.change(data => {
+          for (const {kind, item} of batch) {
+            const record = data[kind].find(x => x.id === item.id);
+            record.notifiedAt = deliveredAt;
+            record.snoozedUntil = 0;
+          }
+        });
+        for(const {kind,item} of batch)notifyReminder(kind,item,deliveredAt);
         changed();
       }
     }
@@ -133,9 +201,7 @@ function registerIPC(){
         if(typeof settings[key]==='boolean')data.settings[key]=settings[key];
       }
     });
-    if (settings.automaticBackups === true) {
-      try { store.dailyBackup(); } catch (error) { changed('O backup automático falhou. Confira a pasta de dados.'); }
-    }
+    if (settings.automaticBackups === true) backupToday();
     return snapshot();
   });
   handle('startup',enabled=>{
@@ -169,8 +235,24 @@ function registerIPC(){
     if(canceled)return false;
     return restoreFromFile(filePaths[0]);
   });
-  handle('backups',()=>store.backups());
-  handle('restore-daily',name=>{
+  handle('backup-choose',async()=>{
+    const result=await dialog.showOpenDialog(win,{title:'Escolher pasta para cópias automáticas',properties:['openDirectory']});
+    if(result.canceled)return false;
+    backupLocation.choose(result.filePaths[0]);
+    return snapshot();
+  });
+  handle('backup-clear',()=>{backupLocation.choose('');return snapshot();});
+  handle('backup-try',()=>{backupLocation.daily();return snapshot();});
+  handle('backups',()=>{
+    const local = store.backups();
+    try { return { local, external: backupLocation.list() }; }
+    catch (error) {
+      console.error('Falha ao listar a pasta de backup:', error.message);
+      return { local, external: [], externalError: 'Não foi possível ler a pasta adicional.' };
+    }
+  });
+  handle('restore-daily',(name,source)=>{
+    if(source==='external')return restoreFromFile(backupLocation.file(name));
     if(!store.backups().includes(name))throw new Error('Backup não encontrado.');
     return restoreFromFile(path.join(store.dir,'backups',name));
   });

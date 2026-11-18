@@ -14,10 +14,12 @@ contextBridge.exposeInMainWorld('orbita',{
   focus:(action,options)=>call('focus',action,options),
   export:()=>call('export'),import:()=>call('import'),
   dataFolder:()=>call('data-folder'),testNotification:()=>call('notification-test'),quit:()=>call('quit'),
-  backups:()=>call('backups'),restoreDaily:name=>call('restore-daily',name),
+  backups:()=>call('backups'),restoreDaily:(name,source)=>call('restore-daily',name,source),
+  chooseBackup:()=>call('backup-choose'),clearBackup:()=>call('backup-clear'),retryBackup:()=>call('backup-try'),
   budget:(category,amount)=>call('budget',category,amount),importCsv:()=>call('import-csv'),
   update:action=>call('update',action),
   onUpdate:callback=>listen('update-state',callback),
   onCapture:callback=>listen('quick-capture',callback),
+  onOpenRecord:callback=>listen('open-record',callback),
   onChange:callback=>listen('changed',callback)
 });

@@ -69,7 +69,7 @@ function renderPriorities(day) {
   const tasks = (db.priorities[day] || []).map(id => db.tasks.find(task => task.id === id)).filter(Boolean);
   return `<section class="card"><div class="card-head"><h2>Prioridades de hoje</h2>
     <button class="text-btn" data-action="nav" data-page="tasks">Escolher tarefas ${icon('arrow')}</button>
-    </div><div class="card-body">${tasks.length ? tasks.map(taskRow).join('') : '<p class="tip">Use a bandeira em uma tarefa para marcar até três prioridades.</p>'}</div></section>`;
+    </div><div class="card-body">${tasks.length ? tasks.map(task=>taskRow(task)).join('') : '<p class="tip">Use a bandeira em uma tarefa para marcar até três prioridades.</p>'}</div></section>`;
 }
 
 function renderWeek() {
@@ -82,10 +82,10 @@ function renderWeek() {
       <h3>${fmtDate(day, { weekday: 'short', day: 'numeric' })}${day === localDate() ? ' · Hoje' : ''}</h3>
       <button class="btn small" data-action="new" data-kind="tasks" data-date="${day}" aria-label="Adicionar tarefa em ${fmtDate(day)}">${icon('plus')} Tarefa</button>
       ${itemsAt(day).map(item => `<button class="week-entry color-${item.color || 'green'}" data-action="edit" data-kind="${item.kind}" data-id="${e(item.id)}"
-      ${item.kind === 'tasks' ? 'draggable="true"' : ''}><small>${e(item.time || (item.kind === 'events' ? 'Dia todo' : 'Sem horário'))}
-      ${item.endTime ? '– ' + e(item.endTime) : ''}${item.duration ? ' · ' + item.duration + ' min' : ''}</small><strong>${e(item.title)}</strong></button>`).join('')}
+      ${item.kind === 'tasks' ? 'draggable="true"' : ''}><small>${e(item.time || (item.kind === 'events' ? 'Dia todo' : item.deadlineOnly ? 'Prazo' : 'Sem horário'))}
+      ${item.endTime ? '– ' + e(item.endTime) : ''}${item.duration && !item.deadlineOnly ? ' · ' + item.duration + ' min' : ''}</small><strong>${e(item.title)}</strong></button>`).join('')}
     </section>`).join('')}</div>
-    <p class="help-shortcut">Arraste uma tarefa para mudar o dia ou altere a data no formulário de edição.</p>`;
+    <p class="help-shortcut">Arraste uma tarefa para planejar outro dia. O prazo de entrega permanece.</p>`;
 }
 
 function renderProjectBoard() {
@@ -169,10 +169,12 @@ function openTrash() {
 
 async function openBackups() {
   const backups = await api.backups();
-  openPanel('Backups automáticos', backups.map(name =>
+  const rows = (source, names) => names.map(name =>
     `<div class="recovery-row"><strong>${fmtDate(name.slice(7, 17), { day: 'numeric', month: 'long', year: 'numeric' })}</strong>
-      <button class="btn small" data-action="restore-daily" data-value="${e(name)}">Prévia e restauração</button></div>`
-  ).join('') || '<p class="tip">Ainda não há backups diários.</p>');
+      <button class="btn small" data-action="restore-daily" data-source="${source}" data-value="${e(name)}">Prévia e restauração</button></div>`
+  ).join('') || '<p class="tip">Nenhuma cópia disponível.</p>';
+  openPanel('Backups automáticos', `<div class="feature-stack"><section><h3>Neste computador</h3>${rows('local', backups.local)}</section>
+    ${db.runtime.backupPath ? `<section><h3>Pasta adicional</h3>${backups.externalError ? `<p class="tip">${e(backups.externalError)}</p>` : rows('external', backups.external)}</section>` : ''}</div>`);
 }
 
 function updateControls(state) {
@@ -226,9 +228,14 @@ async function handleOrganizerClick(action, button) {
   switch (action) {
     case 'capture': openCapture(); break;
     case 'global-search': openGlobalSearch(); break;
-    case 'priority': await refresh(api.priority(id, localDate())); break;
+    case 'priority': await refresh(api.priority(id, button.dataset.date || localDate())); break;
     case 'calendar-view': calendarView = value; renderContent(); break;
     case 'calendar-week': selectedDate = shiftDay(selectedDate, Number(value)); calendarMonth = dayObj(selectedDate); renderContent(); break;
+    case 'review-period': chooseReviewPeriod(value); break;
+    case 'review-day': reviewDay = value; renderContent(); break;
+    case 'plan-task': openPlanTask(id); break;
+    case 'finance-view': financeView = value; renderContent(); break;
+    case 'forecast-months': forecastMonths = Number(value); renderContent(); break;
     case 'project-view': projectView = value; renderContent(); break;
     case 'habit-view': habitView = value; renderContent(); break;
     case 'task-focus': openTaskFocus(id); break;
@@ -243,6 +250,13 @@ async function handleOrganizerClick(action, button) {
     case 'budget-edit': openBudget(value); break;
     case 'open-trash': openTrash(); break;
     case 'open-backups': await openBackups(); break;
+    case 'backup-choose': {
+      const state = await api.chooseBackup();
+      if (state) await refresh(state, 'Pasta adicional configurada.');
+      break;
+    }
+    case 'backup-clear': await refresh(api.clearBackup(), 'Pasta adicional desvinculada.'); break;
+    case 'backup-try': await refresh(api.retryBackup(), 'Cópia adicional de hoje disponível.'); break;
     case 'restore-item':
       button.disabled = true;
       await refresh(api.restoreItem(kind, id), 'Registro restaurado.');
@@ -257,7 +271,7 @@ async function handleOrganizerClick(action, button) {
     case 'restore-daily': {
       button.disabled = true;
       try {
-        const state = await api.restoreDaily(value);
+        const state = await api.restoreDaily(value, button.dataset.source);
         if (state) {
           db = state;
           $('#editor').close();
@@ -303,6 +317,14 @@ async function handleOrganizerForm(form, values) {
   } else if (form.id === 'task-focus-form') {
     await refresh(api.focus('start', { taskId: form.dataset.id, minutes: Number(values.minutes) }), 'Sessão iniciada.');
     go('focus');
+  } else if (form.id === 'plan-task-form') {
+    const task = db.tasks.find(item => item.id === form.dataset.id);
+    if (!task) throw new Error('A tarefa não está mais disponível.');
+    db = await api.upsert('tasks', { ...task, ...values, reminder: !!values.time && task.reminder });
+    reviewDay = values.plannedDate;
+    if (reviewDay < reviewStart || reviewDay > shiftDay(reviewStart, 6)) reviewStart = reviewDay;
+    render();
+    toast('Planejamento salvo.');
   } else return false;
   $('#editor').close();
   return true;
@@ -328,8 +350,8 @@ document.addEventListener('drop', async event => {
   draggedTask = undefined;
   try {
     if (column.dataset.dropStatus) await changeTaskStatus(task.id, column.dataset.dropStatus);
-    else if (column.dataset.dropDate !== task.date) {
-      await refresh(api.upsert('tasks', { ...task, date: column.dataset.dropDate }), 'Tarefa reagendada.');
+    else if (column.dataset.dropDate !== task.plannedDate) {
+      await refresh(api.upsert('tasks', { ...task, plannedDate: column.dataset.dropDate }), 'Planejamento atualizado.');
     }
   } catch (error) { toast(error.message); }
 });

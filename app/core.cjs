@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { localDate: today, nextDate, shiftMonth, scheduled } = require('./dates.js');
+const { localDate: today, nextDate, shiftDay, shiftMonth, scheduled, dayDistance } = require('./dates.js');
 const COLLECTIONS = ['tasks', 'events', 'projects', 'goals', 'habits', 'transactions', 'notes', 'sessions'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -24,11 +24,14 @@ function clean(kind, input) {
   if (kind === 'notes') o = {...o, content:str(input.content,50000), color:colors.includes(input.color)?input.color:'green'};
   if (kind === 'sessions') o = {title:str(input.title,200)||'Sessão de foco', minutes:num(input.minutes,1,240), date:date(input.date)};
   if (kind === 'tasks') {
+    // The old task time was tied to its deadline. Preserve that appointment on upgrade.
+    o.plannedDate = date(input.plannedDate ?? (o.time ? o.date : ''));
     o.status = o.done ? 'done' : input.status === 'doing' ? 'doing' : 'todo';
     o.duration = Math.floor(num(input.duration || 0, 0, 1440));
     o.repeat = ['daily', 'weekdays', 'weekly', 'monthly'].includes(input.repeat) ? input.repeat : '';
-    if (o.repeat && !o.date) throw new Error('Escolha a data inicial da repetição.');
-    o.repeatDay = Math.floor(num(input.repeatDay || Number(o.date.slice(-2)) || 1, 1, 31));
+    const anchor = o.date || o.plannedDate;
+    if (o.repeat && !anchor) throw new Error('Escolha a data inicial da repetição.');
+    o.repeatDay = Math.floor(num(input.repeatDay || Number(anchor.slice(-2)) || 1, 1, 31));
     o.previousId = str(input.previousId, 80);
     o.subtasks = (Array.isArray(input.subtasks) ? input.subtasks : []).slice(0, 50)
       .map(subtask => ({ title: str(subtask?.title, 200), done: !!subtask?.done }))
@@ -49,9 +52,11 @@ function clean(kind, input) {
     o.installment = str(input.installment, 12);
   }
   if (['tasks','events'].includes(kind)) {
+    const reminderDay = kind === 'tasks' ? o.plannedDate : o.date;
     if (o.time && !TIME_RE.test(o.time)) throw new Error('Informe um horário válido.');
-    if (o.time && !o.date) throw new Error('Escolha a data do horário.');
-    if (o.reminder && (!o.date || !o.time)) throw new Error('O lembrete precisa de data e horário.');
+    if (o.time && !reminderDay) throw new Error('Escolha a data do horário.');
+    if (o.reminder && (!reminderDay || !o.time)) throw new Error('O lembrete precisa de data e horário.');
+    o.reminderLead = [10, 60, 1440].includes(Number(input.reminderLead)) ? Number(input.reminderLead) : 0;
     if (kind==='events') {
       if (!o.date) throw new Error('Escolha a data do compromisso.');
       if (o.endTime && (!TIME_RE.test(o.endTime) || !o.time || o.endTime<=o.time)) throw new Error('O término deve ser depois do início, no mesmo dia.');
@@ -62,7 +67,7 @@ function clean(kind, input) {
 }
 function initial() {
   return {
-    schema: 2, tasks: [], events: [], projects: [], goals: [], habits: [], transactions: [], notes: [], sessions: [],
+    schema: 3, tasks: [], events: [], projects: [], goals: [], habits: [], transactions: [], notes: [], sessions: [],
     trash: [], priorities: {}, budgets: [],
     settings: { name: '', dark: false, closeToTray: true, notifications: true, automaticBackups: true, checkForUpdates: true },
     focus: null
@@ -72,20 +77,23 @@ function initial() {
 function cleanRecord(kind, item) {
   return {
     ...clean(kind, item), id: str(item.id, 80), createdAt: str(item.createdAt, 40),
-    updatedAt: str(item.updatedAt, 40), notifiedAt: str(item.notifiedAt, 50)
+    updatedAt: str(item.updatedAt, 40), notifiedAt: str(item.notifiedAt, 50),
+    snoozedUntil: Number.isSafeInteger(item.snoozedUntil) && item.snoozedUntil > 0 ? item.snoozedUntil : 0
   };
 }
 
 function makeRecord(item, old, now = new Date().toISOString()) {
-  const sameReminder = old && old.date === item.date && old.time === item.time && old.reminder === item.reminder;
+  const sameReminder = old && (old.plannedDate ?? old.date) === (item.plannedDate ?? item.date)
+    && old.time === item.time && old.reminder === item.reminder && old.reminderLead === item.reminderLead && old.done === item.done;
   return {
     ...item, id: old?.id || randomUUID(), createdAt: old?.createdAt || now, updatedAt: now,
-    notifiedAt: sameReminder ? old.notifiedAt || '' : ''
+    notifiedAt: sameReminder ? old.notifiedAt || '' : '',
+    snoozedUntil: sameReminder ? old.snoozedUntil || 0 : 0
   };
 }
 
 function validateBackup(raw) {
-  if (!raw || ![1, 2].includes(raw.schema) || !COLLECTIONS.every(k=>Array.isArray(raw[k]))) throw new Error('Este arquivo não é um backup válido do Órbita.');
+  if (!raw || ![1, 2, 3].includes(raw.schema) || !COLLECTIONS.every(k=>Array.isArray(raw[k]))) throw new Error('Este arquivo não é um backup válido do Órbita.');
   const out=initial();
   for (const kind of COLLECTIONS) {
     if(raw[kind].length>50000) throw new Error('Backup muito grande.');
@@ -100,7 +108,7 @@ function validateBackup(raw) {
   out.settings={name:str(raw.settings?.name,60),dark:!!raw.settings?.dark,closeToTray:raw.settings?.closeToTray!==false,notifications:raw.settings?.notifications!==false};
   out.settings.automaticBackups = raw.settings?.automaticBackups !== false;
   out.settings.checkForUpdates = raw.settings?.checkForUpdates !== false;
-  if (raw.schema === 2) {
+  if (raw.schema >= 2) {
     if (raw.trash !== undefined && (!Array.isArray(raw.trash) || raw.trash.length > 50000)) throw new Error('Lixeira inválida no backup.');
     const deleted = new Set();
     out.trash = (raw.trash || []).map(entry => {
@@ -172,7 +180,8 @@ class Store {
       if(projectCollections.includes(kind) && item.projectId && !data.projects.some(p=>p.id===item.projectId)) throw new Error('O projeto não existe mais.');
       const old=index>=0?data[kind][index]:null;
       if (old && 'repeatDay' in item) {
-        item.repeatDay = old.date === item.date ? old.repeatDay : Number(item.date.slice(-2)) || 1;
+        const anchor = item.date || item.plannedDate;
+        item.repeatDay = (old.date || old.plannedDate) === anchor ? old.repeatDay : Number(anchor.slice(-2)) || 1;
       }
       const installments = kind === 'transactions' && !old ? Number(input.installments || 1) : 1;
       if (!Number.isInteger(installments) || installments < 1 || installments > 60) throw new Error('Escolha entre 1 e 60 parcelas.');
@@ -193,9 +202,13 @@ class Store {
       if (kind === 'tasks' && item.done && !old?.done && item.repeat) {
         const hasNext = record => record.previousId === result.id;
         if (data.tasks.some(hasNext) || data.trash.some(entry => entry.kind === 'tasks' && hasNext(entry.item))) return;
-        const next = nextDate(item.date, item.repeat, item.repeatDay);
+        const anchor = item.date || item.plannedDate;
+        const next = nextDate(anchor, item.repeat, item.repeatDay);
+        const offset = dateOK(next) ? dayDistance(anchor, next) : 0;
         if (dateOK(next)) data.tasks.push(makeRecord({
-          ...item, date: next, done: false, status: 'todo', previousId: result.id,
+          ...item, date: item.date ? next : '',
+          plannedDate: item.plannedDate ? date(shiftDay(item.plannedDate, offset)) : '',
+          done: false, status: 'todo', previousId: result.id,
           subtasks: item.subtasks.map(subtask => ({ ...subtask, done: false }))
         }));
       }
@@ -214,6 +227,14 @@ class Store {
         }
       }
     });
+  }
+
+  snoozeReminder(kind, id, until, deliveredAt) {
+    if (!['tasks', 'events'].includes(kind)) return false;
+    const record = this.data[kind].find(item => item.id === id);
+    if (!record?.reminder || record.done || record.notifiedAt !== deliveredAt || record.snoozedUntil) return false;
+    this.change(data => { data[kind].find(item => item.id === id).snoozedUntil = until; });
+    return true;
   }
 
   restore(kind, id) {
@@ -314,8 +335,9 @@ function streak(checks,now=new Date()) {
 function dueReminders(data, now=Date.now()) {
   const due=[];
   for(const kind of ['tasks','events']) for(const item of data[kind]) {
-    if(!item.reminder || item.notifiedAt || item.done || !item.date || !item.time)continue;
-    const at=+new Date(`${item.date}T${item.time}:00`);
+    const day = kind === 'tasks' ? item.plannedDate ?? item.date : item.date;
+    if(!item.reminder || item.done || !day || !item.time || (item.notifiedAt && !item.snoozedUntil))continue;
+    const at=item.snoozedUntil || +new Date(`${day}T${item.time}:00`) - (item.reminderLead || 0) * 60000;
     if(at<=now && now-at<=86400000)due.push({kind,item});
   }
   return due;

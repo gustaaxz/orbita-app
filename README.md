@@ -11,12 +11,13 @@ Em **Configurações → Iniciar com o Windows**, ative a opção para o aplicat
 ## Funcionalidades
 
 - **Meu dia:** tarefas com prazo até hoje, compromissos, hábitos e minutos de foco. Use a bandeira para escolher até três tarefas prioritárias por dia.
-- **Tarefas:** prazo, horário, duração, projeto, lembretes e subtarefas. Ao concluir uma tarefa recorrente, o Órbita cria a próxima ocorrência com a lista de subtarefas desmarcada. As opções são diária, dias úteis, semanal e mensal.
-- **Calendário:** visões mensal e semanal com tarefas e compromissos. Na semana, arraste uma tarefa para mudar o dia. Você também pode editar a data no formulário.
+- **Tarefas:** prazo de entrega, data e horário planejados, duração, projeto, lembretes e subtarefas. Ao concluir uma tarefa recorrente, o Órbita cria a próxima ocorrência com a lista de subtarefas desmarcada. As opções são diária, dias úteis, semanal e mensal.
+- **Revisão semanal:** caixa de entrada para tarefas sem data, prazos atrasados, próximos compromissos, minutos planejados e até três prioridades por dia. Use **Planejar** para reservar um dia e horário para uma tarefa.
+- **Calendário:** visões mensal e semanal com tarefas e compromissos. Na semana, arraste uma tarefa para mudar a data planejada. O prazo de entrega continua no dia original.
 - **Projetos:** quadro com as colunas A fazer, Em andamento e Concluído. A visão de projetos reúne progresso, notas, metas e minutos de foco.
 - **Metas:** objetivo numérico, unidade, prazo e atualização manual do progresso.
 - **Hábitos:** prática diária, em dias escolhidos ou com uma meta semanal. Consulte e marque registros no histórico semanal ou mensal.
-- **Finanças:** receitas e despesas em reais, lançamentos mensais, parcelas, importação de CSV e limites mensais por categoria. Informe o valor total ao parcelar. O primeiro mês usa a data escolhida e os demais preservam o dia quando possível.
+- **Finanças:** receitas e despesas em reais, lançamentos mensais, parcelas, importação de CSV e limites mensais por categoria. Informe o valor total ao parcelar. Em **Previsão**, veja de 3 a 12 meses de despesas, com parcelas já cadastradas e recorrências projetadas em valores separados.
 - **Notas:** texto simples, cores e busca.
 - **Foco:** duração de 1 a 240 minutos, pausa, continuação e histórico de sessões completas. Na edição de uma tarefa, use **Foco** para começar e registrar o tempo no projeto associado. Ao reabrir o aplicativo, uma sessão vencida é registrada uma única vez.
 - **Preferências:** nome, tema claro/escuro, lembretes, bandeja e início com o Windows.
@@ -33,7 +34,7 @@ O Órbita valida o arquivo antes de importar e pede confirmação com a quantida
 
 ## Lembretes e segundo plano
 
-Marque a opção de lembrete ao criar ou editar uma tarefa ou compromisso e informe data e horário. O aviso é enviado no horário escolhido, uma vez por registro. Alterar data, horário ou reativar o lembrete permite um novo aviso.
+Marque a opção de lembrete ao criar ou editar uma tarefa ou compromisso. Para tarefas, informe a data e o horário planejados. Escolha avisar no horário, 10 minutos, uma hora ou um dia antes. Quando disponíveis no Windows, os botões da notificação permitem adiar por 10 minutos, concluir a tarefa ou abrir o compromisso.
 
 O aplicativo precisa estar aberto para emitir avisos. Por padrão, clicar no X oculta a janela na bandeja, perto do relógio, mantendo os lembretes ativos. Clique no ícone para abrir; clique com o botão direito para sair. O Windows pode agrupar, adiar ou silenciar os avisos conforme suas configurações.
 
@@ -44,6 +45,8 @@ Ao reabrir o aplicativo, lembretes pendentes das últimas 24 horas são enviados
 Os dados ficam em `%APPDATA%\Orbita\dados.json`. A gravação usa arquivo temporário e troca do arquivo final. `dados.json.bak` guarda a versão anterior. Se o arquivo principal estiver danificado, o aplicativo tenta a cópia anterior e preserva o arquivo com problema. Se ambos estiverem ilegíveis, o aplicativo não sobrescreve os arquivos e mostra a localização para recuperação.
 
 Use **Configurações → Exportar backup** regularmente e guarde o arquivo fora desta pasta. Os arquivos locais e backups não são criptografados nem protegidos por senha. Desinstalar o aplicativo preserva os dados pessoais. A restauração é validada antes de substituir os dados atuais.
+
+Em **Configurações → Pasta de backup adicional**, escolha uma pasta em outro disco ou uma pasta que você já sincroniza pelo Windows. O Órbita mantém as cópias locais e até 14 cópias na pasta adicional. Se o disco estiver desconectado, a cópia local continua disponível. Reconecte o disco e use **Verificar cópia de hoje** para tentar novamente. O histórico permite restaurar de qualquer uma das duas pastas.
 
 ## Atalhos
 

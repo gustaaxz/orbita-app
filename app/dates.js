@@ -10,6 +10,7 @@
   }
 
   const dateObject = value => new Date(value + 'T12:00:00');
+  const dayDistance = (from, to) => (Date.parse(to) - Date.parse(from)) / 86400000;
 
   function shiftDay(value, offset) {
     const day = dateObject(value);
@@ -63,7 +64,7 @@
     }
   }
 
-  const dates = { localDate, dateObject, shiftDay, shiftMonth, nextDate, monday, week, scheduled, habitStreak };
+  const dates = { localDate, dateObject, shiftDay, shiftMonth, nextDate, dayDistance, monday, week, scheduled, habitStreak };
   if (typeof module === 'object') module.exports = dates;
   else window.orbitaDates = dates;
 })();

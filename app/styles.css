@@ -40,6 +40,19 @@ h3,.mini-focus{overflow-wrap:anywhere}.agenda-dot{background:var(--item-color,va
 .recovery-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
 .recovery-row>div{display:grid;gap:3px;overflow-wrap:anywhere}
 .csv-example{overflow:auto;background:var(--bg);padding:12px}
+.reminder-lead{display:none;margin-top:10px}
+.reminder-options:has(input:checked) .reminder-lead{display:block}
+.review-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin-bottom:16px}
+.review-day{display:grid;align-content:start;gap:4px;text-align:left;padding:10px;border:1px solid var(--line);min-width:0;overflow-wrap:anywhere}
+.review-day[aria-pressed="true"]{border-color:var(--accent);background:var(--soft)}
+.review-day small,.forecast-totals small{color:var(--muted)}
+.review-task{display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--line)}
+.review-task .btn{flex-shrink:0}
+.review-columns .stack{min-width:0}
+.review-columns h3{margin:0}
+#sidebar nav{overflow:auto;min-height:0}
+.forecast-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.forecast-totals>div{display:grid;gap:4px;padding:10px;background:var(--bg);border-radius:8px;overflow-wrap:anywhere}
 #toast button{background:transparent;color:inherit;border:0;text-decoration:underline;font-weight:700}
 #editor .modal-body{overflow-y:auto}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:0s!important;animation-duration:0s!important}}

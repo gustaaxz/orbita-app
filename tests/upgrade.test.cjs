@@ -4,9 +4,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Store, initial, validateBackup, setBudget } = require('../app/core.cjs');
+const { Store, initial, validateBackup, setBudget, dueReminders } = require('../app/core.cjs');
 const { nextDate, habitStreak } = require('../app/dates.js');
 const { parseTransactions } = require('../app/finance.cjs');
+const { expenseForecast } = require('../app/forecast.js');
+const { BackupLocation } = require('../app/backup-location.cjs');
 
 function fixture() {
   const scratch = path.join(__dirname, 'scratch');
@@ -25,7 +27,7 @@ test('a v1 data file opens with linked records, notifications and a paused focus
   };
   fs.writeFileSync(store.file, JSON.stringify(old));
   const migrated = new Store(store.dir);
-  assert.equal(migrated.data.schema, 2);
+  assert.equal(migrated.data.schema, 3);
   assert.equal(migrated.data.tasks[0].projectId, 'project');
   assert.equal(migrated.data.tasks[0].notifiedAt, old.tasks[0].notifiedAt);
   assert.equal(migrated.data.habits[0].frequency, 'daily');
@@ -99,4 +101,89 @@ test('CSV handles Brazilian amounts and rejects invalid rows without a partial i
   assert.equal(store.data.transactions.length, 0);
   store.importTransactions(rows);
   assert.equal(store.data.transactions[0].amount, 123456);
+});
+
+test('a v1.1 timed task retains its calendar slot, deadline and reminder history on upgrade', () => {
+  const store = fixture();
+  fs.writeFileSync(store.file, JSON.stringify({
+    ...initial(), schema: 2,
+    tasks: [{ id: 'report', title: 'Relatório', date: '2026-11-20', time: '09:00', reminder: true, notifiedAt: '2026-11-20T12:00:00Z' }],
+    priorities: { '2026-11-20': ['report'] },
+    budgets: [{ category: 'Casa', amount: 10000 }]
+  }));
+  const migrated = new Store(store.dir);
+  const [task] = migrated.data.tasks;
+  assert.equal(task.plannedDate, '2026-11-20');
+  assert.equal(task.notifiedAt, '2026-11-20T12:00:00Z');
+  assert.deepEqual(migrated.data.priorities['2026-11-20'], ['report']);
+  assert.equal(migrated.data.budgets[0].amount, 10000);
+  migrated.upsert('tasks', { ...task, plannedDate: '2026-11-19' });
+  const [rescheduled] = new Store(store.dir).data.tasks;
+  assert.equal(rescheduled.date, '2026-11-20');
+  assert.equal(rescheduled.plannedDate, '2026-11-19');
+  assert.equal(rescheduled.notifiedAt, '');
+});
+
+test('early and snoozed reminders fire from the planned time and survive restart', () => {
+  const store = fixture();
+  const task = store.upsert('tasks', {
+    title: 'Preparar entrega', date: '2026-11-20', plannedDate: '2026-11-19',
+    time: '09:00', reminder: true, reminderLead: 60
+  });
+  const trigger = +new Date('2026-11-19T08:00:00');
+  assert.equal(dueReminders(store.data, trigger - 1).length, 0);
+  assert.equal(dueReminders(store.data, trigger)[0].item.id, task.id);
+  const deliveredAt = new Date(trigger).toISOString();
+  store.change(data => { data.tasks[0].notifiedAt = deliveredAt; });
+  assert.equal(store.snoozeReminder('tasks', task.id, trigger + 600000, deliveredAt), true);
+  assert.equal(store.snoozeReminder('tasks', task.id, trigger + 1200000, deliveredAt), false);
+  const reloaded = new Store(store.dir);
+  assert.equal(dueReminders(reloaded.data, trigger + 599999).length, 0);
+  assert.equal(dueReminders(reloaded.data, trigger + 600000)[0].item.id, task.id);
+  reloaded.upsert('tasks', { ...reloaded.data.tasks[0], done: true });
+  assert.equal(dueReminders(reloaded.data, trigger + 600000).length, 0);
+});
+
+test('a repeated scheduled task preserves the offset between its plan and its deadline', () => {
+  const store = fixture();
+  const task = store.upsert('tasks', { title: 'Relatório', date: '2026-11-20', plannedDate: '2026-11-18', repeat: 'weekly' });
+  store.upsert('tasks', { ...task, done: true });
+  assert.deepEqual(store.data.tasks.map(({ date, plannedDate }) => [date, plannedDate]), [
+    ['2026-11-20', '2026-11-18'], ['2026-11-27', '2026-11-25']
+  ]);
+});
+
+test('the selected folder keeps an independent daily copy and can be reconnected', () => {
+  const store = fixture();
+  const backup = new BackupLocation(store);
+  const parent = fs.mkdtempSync(path.join(path.dirname(store.dir), 'external-'));
+  backup.choose(parent);
+  store.upsert('notes', { title: 'Teste de backup' });
+  store.dailyBackup('2026-11-19');
+  backup.daily('2026-11-19');
+  assert.equal(new BackupLocation(store).directory(), backup.directory());
+  const copy = JSON.parse(fs.readFileSync(backup.file('backup-2026-11-19.json'), 'utf8'));
+  assert.equal(copy.notes[0].title, 'Teste de backup');
+  const offline = parent + '-offline';
+  fs.renameSync(parent, offline);
+  assert.throws(() => backup.daily('2026-11-20'), /indisponível/);
+  store.dailyBackup('2026-11-20');
+  assert.ok(store.backups().includes('backup-2026-11-20.json'));
+  fs.renameSync(offline, parent);
+  backup.daily('2026-11-20');
+  backup.choose('');
+  assert.equal(new BackupLocation(store).directory(), '');
+  assert.ok(fs.readdirSync(path.join(parent, 'Órbita Backups')).length);
+});
+
+test('expense forecast lists booked installments separately from projected recurrences', () => {
+  const records = [
+    { date: '2027-01-31', amount: 10000, type: 'expense', repeat: 'monthly', repeatDay: 31 },
+    { date: '2027-02-05', amount: 3000, type: 'expense', installment: '2/3' },
+    { date: '2027-02-06', amount: 25000, type: 'income' }
+  ];
+  const months = expenseForecast(records, '2027-01-20', 3);
+  assert.deepEqual(months.map(month => month.recorded.map(item => item.amount)), [[10000], [3000], []]);
+  assert.deepEqual(months.map(month => month.projected.map(item => item.date)), [[], ['2027-02-28'], ['2027-03-31']]);
+  assert.equal(records.length, 3);
 });

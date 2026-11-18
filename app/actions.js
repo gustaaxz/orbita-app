@@ -69,6 +69,13 @@ function remaining(){const f=db?.focus;return f?f.status==='running'?Math.max(0,
 function updateTimers(){if(!db)return;const seconds=remaining(),text=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;document.querySelectorAll('[data-timer],[data-focus-timer]').forEach(el=>el.textContent=text);}
 api.onUpdate(renderUpdate);
 api.onCapture(openCapture);
+api.onOpenRecord(async ({kind,id})=>{
+  try {
+    db=await api.read();
+    if (!$('#editor').open) { render(); openEditor(kind,id); }
+    else toast('Feche o formulário atual para abrir o item do lembrete.');
+  } catch(error){toast(error.message);}
+});
 api.onChange(async({message}={})=>{try{db=await api.read();render();if(message)toast(message);}catch(error){toast(error.message);}});
 setInterval(updateTimers,1000);
 let knownDay=localDate();setInterval(()=>{if(knownDay!==localDate()){knownDay=localDate();render();}},30000);
