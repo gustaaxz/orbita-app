@@ -2,11 +2,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { localDate: today, nextDate, shiftMonth, scheduled } = require('./dates.js');
 const COLLECTIONS = ['tasks', 'events', 'projects', 'goals', 'habits', 'transactions', 'notes', 'sessions'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const colors = ['green', 'blue', 'amber', 'rose', 'purple'];
-function today(now = new Date()) { return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`; }
 function dateOK(v) { if (!DATE_RE.test(v)) return false; const d = new Date(`${v}T12:00:00`); return Number.isFinite(+d) && today(d) === v; }
 function str(v, max = 300) { return typeof v === 'string' ? v.trim().slice(0,max) : ''; }
 function date(v) { if (!v) return ''; if (!dateOK(v)) throw new Error('Informe uma data válida.'); return v; }
@@ -23,6 +23,31 @@ function clean(kind, input) {
   if (kind === 'transactions') o = {...o, date:date(input.date), type:input.type === 'income'?'income':'expense', amount:Math.round(num(input.amount,1,1e12)), category:str(input.category,80)||'Outros'};
   if (kind === 'notes') o = {...o, content:str(input.content,50000), color:colors.includes(input.color)?input.color:'green'};
   if (kind === 'sessions') o = {title:str(input.title,200)||'Sessão de foco', minutes:num(input.minutes,1,240), date:date(input.date)};
+  if (kind === 'tasks') {
+    o.status = o.done ? 'done' : input.status === 'doing' ? 'doing' : 'todo';
+    o.duration = Math.floor(num(input.duration || 0, 0, 1440));
+    o.repeat = ['daily', 'weekdays', 'weekly', 'monthly'].includes(input.repeat) ? input.repeat : '';
+    if (o.repeat && !o.date) throw new Error('Escolha a data inicial da repetição.');
+    o.repeatDay = Math.floor(num(input.repeatDay || Number(o.date.slice(-2)) || 1, 1, 31));
+    o.previousId = str(input.previousId, 80);
+    o.subtasks = (Array.isArray(input.subtasks) ? input.subtasks : []).slice(0, 50)
+      .map(subtask => ({ title: str(subtask?.title, 200), done: !!subtask?.done }))
+      .filter(subtask => subtask.title);
+  }
+  if (['notes', 'goals', 'sessions'].includes(kind)) o.projectId = str(input.projectId, 80);
+  if (kind === 'sessions') o.taskId = str(input.taskId, 80);
+  if (kind === 'habits') {
+    o.frequency = ['days', 'weekly'].includes(input.frequency) ? input.frequency : 'daily';
+    o.weekdays = [...new Set((Array.isArray(input.weekdays) ? input.weekdays : [])
+      .filter(day => Number.isInteger(day) && day >= 0 && day < 7))];
+    if (o.frequency === 'days' && !o.weekdays.length) throw new Error('Escolha pelo menos um dia da semana.');
+    o.targetPerWeek = Math.floor(num(input.targetPerWeek || 3, 1, 7));
+  }
+  if (kind === 'transactions') {
+    o.repeat = input.repeat === 'monthly' ? 'monthly' : '';
+    o.repeatDay = Math.floor(num(input.repeatDay || Number(o.date.slice(-2)) || 1, 1, 31));
+    o.installment = str(input.installment, 12);
+  }
   if (['tasks','events'].includes(kind)) {
     if (o.time && !TIME_RE.test(o.time)) throw new Error('Informe um horário válido.');
     if (o.time && !o.date) throw new Error('Escolha a data do horário.');
@@ -35,24 +60,82 @@ function clean(kind, input) {
   if (kind==='transactions' && !o.date) throw new Error('Escolha a data do lançamento.');
   return o;
 }
-function initial() { return {schema:1, tasks:[],events:[],projects:[],goals:[],habits:[],transactions:[],notes:[],sessions:[], settings:{name:'',dark:false,closeToTray:true,notifications:true}, focus:null}; }
+function initial() {
+  return {
+    schema: 2, tasks: [], events: [], projects: [], goals: [], habits: [], transactions: [], notes: [], sessions: [],
+    trash: [], priorities: {}, budgets: [],
+    settings: { name: '', dark: false, closeToTray: true, notifications: true, automaticBackups: true, checkForUpdates: true },
+    focus: null
+  };
+}
+
+function cleanRecord(kind, item) {
+  return {
+    ...clean(kind, item), id: str(item.id, 80), createdAt: str(item.createdAt, 40),
+    updatedAt: str(item.updatedAt, 40), notifiedAt: str(item.notifiedAt, 50)
+  };
+}
+
+function makeRecord(item, old, now = new Date().toISOString()) {
+  const sameReminder = old && old.date === item.date && old.time === item.time && old.reminder === item.reminder;
+  return {
+    ...item, id: old?.id || randomUUID(), createdAt: old?.createdAt || now, updatedAt: now,
+    notifiedAt: sameReminder ? old.notifiedAt || '' : ''
+  };
+}
+
 function validateBackup(raw) {
-  if (!raw || raw.schema !== 1 || !COLLECTIONS.every(k=>Array.isArray(raw[k]))) throw new Error('Este arquivo não é um backup válido do Órbita.');
+  if (!raw || ![1, 2].includes(raw.schema) || !COLLECTIONS.every(k=>Array.isArray(raw[k]))) throw new Error('Este arquivo não é um backup válido do Órbita.');
   const out=initial();
   for (const kind of COLLECTIONS) {
     if(raw[kind].length>50000) throw new Error('Backup muito grande.');
     const ids=new Set();
     out[kind]=raw[kind].map(item=>{
-      const o=clean(kind,item); const id=str(item.id,80);
-      if (!id || ids.has(id)) throw new Error('Backup contém registros duplicados ou sem identificação.');
-      ids.add(id); return {...o,id,createdAt:str(item.createdAt,40),updatedAt:str(item.updatedAt,40),notifiedAt:str(item.notifiedAt,50)};
+      const record = cleanRecord(kind, item);
+      if (!record.id || ids.has(record.id)) throw new Error('Backup contém registros duplicados ou sem identificação.');
+      ids.add(record.id);
+      return record;
     });
   }
   out.settings={name:str(raw.settings?.name,60),dark:!!raw.settings?.dark,closeToTray:raw.settings?.closeToTray!==false,notifications:raw.settings?.notifications!==false};
+  out.settings.automaticBackups = raw.settings?.automaticBackups !== false;
+  out.settings.checkForUpdates = raw.settings?.checkForUpdates !== false;
+  if (raw.schema === 2) {
+    if (raw.trash !== undefined && (!Array.isArray(raw.trash) || raw.trash.length > 50000)) throw new Error('Lixeira inválida no backup.');
+    const deleted = new Set();
+    out.trash = (raw.trash || []).map(entry => {
+      if (!COLLECTIONS.includes(entry?.kind) || entry.kind === 'sessions') throw new Error('Lixeira inválida no backup.');
+      const item = cleanRecord(entry.kind, entry.item);
+      const key = entry.kind + ':' + item.id;
+      if (!item.id || deleted.has(key) || out[entry.kind].some(active => active.id === item.id)) {
+        throw new Error('Registro duplicado na lixeira.');
+      }
+      deleted.add(key);
+      return { kind: entry.kind, item, deletedAt: str(entry.deletedAt, 40) };
+    });
+    for (const [day, ids] of Object.entries(raw.priorities || {})) {
+      if (dateOK(day) && Array.isArray(ids)) out.priorities[day] = [...new Set(ids.filter(id => typeof id === 'string' && id.length <= 80))].slice(0, 3);
+    }
+    if (Array.isArray(raw.budgets)) {
+      for (const budget of raw.budgets) setBudget(out, budget?.category, budget?.amount);
+    }
+  }
   // A restore never starts a timer unexpectedly.
   out.focus=null;
   return out;
 }
+
+function setBudget(data, category, amount) {
+  const name = str(category, 80);
+  if (!name) throw new Error('Informe uma categoria.');
+  const cents = Math.round(num(amount, 0, 1e12));
+  const key = value => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+  data.budgets = data.budgets.filter(budget => key(budget.category) !== key(name));
+  if (cents) data.budgets.push({ category: name, amount: cents });
+}
+
+const projectCollections = ['tasks', 'notes', 'goals'];
+
 class Store {
   constructor(dir) {
     this.dir=dir; this.file=path.join(dir,'dados.json'); this.recovered=false;
@@ -69,7 +152,7 @@ class Store {
     const raw=JSON.parse(fs.readFileSync(file,'utf8')); const out=validateBackup(raw);
     const f=raw.focus;
     if (f && Number.isFinite(f.remaining) && f.remaining>=0 && f.remaining<=14400 && ['running','paused'].includes(f.status)) {
-      if (f.status!=='running' || (Number.isFinite(f.endsAt) && f.endsAt>0)) out.focus={title:str(f.title,200),minutes:num(f.minutes,1,240),remaining:f.remaining,status:f.status,endsAt:f.endsAt || null};
+      if (f.status!=='running' || (Number.isFinite(f.endsAt) && f.endsAt>0)) out.focus={title:str(f.title,200),minutes:num(f.minutes,1,240),remaining:f.remaining,status:f.status,endsAt:f.endsAt || null,taskId:str(f.taskId,80),projectId:str(f.projectId,80)};
     }
     return out;
   }
@@ -86,15 +169,141 @@ class Store {
     this.change(data=>{
       const index=input.id?data[kind].findIndex(x=>x.id===input.id):-1;
       if(input.id && index<0) throw new Error('Este registro não existe mais.');
-      if(kind==='tasks' && item.projectId && !data.projects.some(p=>p.id===item.projectId)) throw new Error('O projeto não existe mais.');
+      if(projectCollections.includes(kind) && item.projectId && !data.projects.some(p=>p.id===item.projectId)) throw new Error('O projeto não existe mais.');
       const old=index>=0?data[kind][index]:null;
-      result={...item,id:old?.id || randomUUID(),createdAt:old?.createdAt || new Date().toISOString(),updatedAt:new Date().toISOString(),notifiedAt:old && old.date===item.date && old.time===item.time && old.reminder===item.reminder?old.notifiedAt||'':''};
+      if (old && 'repeatDay' in item) {
+        item.repeatDay = old.date === item.date ? old.repeatDay : Number(item.date.slice(-2)) || 1;
+      }
+      const installments = kind === 'transactions' && !old ? Number(input.installments || 1) : 1;
+      if (!Number.isInteger(installments) || installments < 1 || installments > 60) throw new Error('Escolha entre 1 e 60 parcelas.');
+      if (installments > 1) {
+        if (item.repeat || item.amount < installments) throw new Error('Use um valor de pelo menos um centavo por parcela, sem repetição mensal.');
+        for (let i = 0; i < installments; i++) {
+          const installment = makeRecord({
+            ...item, date: date(shiftMonth(item.date, i)), installment: `${i + 1}/${installments}`,
+            amount: Math.floor(item.amount / installments) + Number(i < item.amount % installments)
+          });
+          data.transactions.push(installment);
+          if (i === 0) result = installment;
+        }
+        return;
+      }
+      result=makeRecord(item,old);
       if(index>=0)data[kind][index]=result;else data[kind].push(result);
+      if (kind === 'tasks' && item.done && !old?.done && item.repeat) {
+        const hasNext = record => record.previousId === result.id;
+        if (data.tasks.some(hasNext) || data.trash.some(entry => entry.kind === 'tasks' && hasNext(entry.item))) return;
+        const next = nextDate(item.date, item.repeat, item.repeatDay);
+        if (dateOK(next)) data.tasks.push(makeRecord({
+          ...item, date: next, done: false, status: 'todo', previousId: result.id,
+          subtasks: item.subtasks.map(subtask => ({ ...subtask, done: false }))
+        }));
+      }
     }); return result;
   }
   remove(kind,id) {
     if(!COLLECTIONS.includes(kind) || kind==='sessions') throw new Error('Tipo de registro inválido.');
-    this.change(data=>{data[kind]=data[kind].filter(x=>x.id!==id); if(kind==='projects') data.tasks.forEach(t=>{if(t.projectId===id)t.projectId='';});});
+    const item = this.data[kind].find(record => record.id === id);
+    if (!item) throw new Error('Este registro não existe mais.');
+    this.change(data => {
+      data[kind] = data[kind].filter(record => record.id !== id);
+      data.trash.unshift({ kind, item, deletedAt: new Date().toISOString() });
+      if (kind === 'projects') {
+        for (const collection of projectCollections) {
+          for (const record of data[collection]) if (record.projectId === id) record.projectId = '';
+        }
+      }
+    });
+  }
+
+  restore(kind, id) {
+    this.change(data => {
+      const index = data.trash.findIndex(entry => entry.kind === kind && entry.item.id === id);
+      if (index < 0) throw new Error('Este registro não está mais na lixeira.');
+      const [{ item }] = data.trash.splice(index, 1);
+      if (item.projectId && !data.projects.some(p => p.id === item.projectId)) item.projectId = '';
+      data[kind].push(item);
+    });
+  }
+
+  prioritize(id, day) {
+    if (!dateOK(day) || !this.data.tasks.some(task => task.id === id)) throw new Error('Tarefa ou data inválida.');
+    this.change(data => {
+      const ids = data.priorities[day] || [];
+      if (ids.includes(id)) data.priorities[day] = ids.filter(value => value !== id);
+      else {
+        const active = ids.filter(value => data.tasks.some(task => task.id === value));
+        if (active.length >= 3) throw new Error('Escolha até três prioridades para o dia.');
+        data.priorities[day] = [...active, id];
+      }
+    });
+  }
+
+  checkHabit(id, day) {
+    const habit = this.data.habits.find(item => item.id === id);
+    if (!habit) throw new Error('Hábito não encontrado.');
+    if (!dateOK(day) || day > today()) throw new Error('Você só pode marcar dias que já chegaram.');
+    const marked = habit.checks.includes(day);
+    if (!marked && !scheduled(habit, day)) throw new Error('Este hábito não está planejado para esse dia.');
+    const checks = marked ? habit.checks.filter(value => value !== day) : [...habit.checks, day];
+    this.upsert('habits', { ...habit, checks });
+  }
+
+  repeatTransactions(day = today()) {
+    const due = this.data.transactions.filter(item => item.repeat && nextDate(item.date, item.repeat, item.repeatDay) <= day);
+    if (!due.length) return false;
+    this.change(data => {
+      for (const item of due) {
+        const older = data.transactions.find(record => record.id === item.id);
+        older.repeat = '';
+        let current = item;
+        let next = nextDate(current.date, item.repeat, item.repeatDay);
+        while (dateOK(next) && next <= day) {
+          current = makeRecord({ ...item, date: next, repeat: '' });
+          data.transactions.push(current);
+          next = nextDate(current.date, item.repeat, item.repeatDay);
+        }
+        if (current !== item) current.repeat = item.repeat;
+      }
+    });
+    return true;
+  }
+
+  importTransactions(items) {
+    if (items.length > 10000) throw new Error('O arquivo excede 10.000 lançamentos.');
+    const records = items.map((item, index) => {
+      try {
+        return makeRecord(clean('transactions', item));
+      } catch (error) {
+        throw new Error(`Lançamento ${index + 1}: ${error.message}`);
+      }
+    });
+    this.change(data => data.transactions.push(...records));
+  }
+
+  dailyBackup(day = today()) {
+    if (!this.data.settings.automaticBackups) return;
+    const directory = path.join(this.dir, 'backups');
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, `backup-${day}.json`);
+    if (fs.existsSync(file)) return;
+    fs.writeFileSync(file + '.tmp', JSON.stringify(this.data, null, 2), 'utf8');
+    fs.renameSync(file + '.tmp', file);
+    for (const name of this.backups().slice(14)) fs.unlinkSync(path.join(directory, name));
+  }
+
+  backups() {
+    const directory = path.join(this.dir, 'backups');
+    if (!fs.existsSync(directory)) return [];
+    return fs.readdirSync(directory, { withFileTypes: true })
+      .filter(entry => entry.isFile() && /^backup-\d{4}-\d{2}-\d{2}\.json$/.test(entry.name))
+      .map(entry => entry.name).sort().reverse();
+  }
+
+  restoreBackup(data) {
+    const file = path.join(this.dir, `antes-de-restaurar-${Date.now()}-${randomUUID()}.json`);
+    fs.writeFileSync(file, JSON.stringify(this.data, null, 2), 'utf8');
+    this.write(data);
   }
 }
 function streak(checks,now=new Date()) {
@@ -111,4 +320,4 @@ function dueReminders(data, now=Date.now()) {
   }
   return due;
 }
-module.exports={Store,initial,validateBackup,clean,today,dateOK,streak,dueReminders,COLLECTIONS};
+module.exports={Store,initial,validateBackup,clean,today,dateOK,streak,dueReminders,setBudget,COLLECTIONS};

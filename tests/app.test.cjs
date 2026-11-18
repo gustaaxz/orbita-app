@@ -94,6 +94,37 @@ try{
   // All screens must fit at the supported minimum width without horizontal overflow.
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1000,720));
   for(const label of ['Meu dia','Tarefas','Calendário','Projetos e metas','Hábitos','Finanças','Notas','Foco','Configurações']){await nav(label);const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);assert.equal(overflow,false,'Horizontal overflow: '+label);}
+  await nav('Tarefas');
+  await page.getByRole('button',{name:'Capturar',exact:true}).click();
+  await page.getByRole('textbox',{name:'Título',exact:true}).fill('Conferir relatório');
+  await page.getByRole('button',{name:'Salvar tarefa',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('#editor').open);
+  await page.keyboard.press('Control+k');
+  await page.getByRole('searchbox',{name:'Buscar no Órbita'}).fill('relatorio');
+  await page.locator('#global-results').getByRole('button',{name:/Conferir relatório/}).click();
+  await page.getByRole('button',{name:'Adicionar subtarefa'}).click();
+  await page.getByRole('textbox',{name:'Nome da subtarefa'}).fill('Revisar dados');
+  await page.locator('#edit-form [name=date]').fill(today());
+  await page.getByLabel('Repetição').selectOption('weekly');
+  await page.getByRole('button',{name:'Salvar alterações'}).click();
+  await page.waitForFunction(()=>!document.querySelector('#editor').open);
+  await page.getByRole('button',{name:'Prioridade de hoje: Conferir relatório'}).click();
+  await page.waitForFunction(async()=> Object.values((await window.orbita.read()).priorities).some(ids=>ids.length===1));
+  await nav('Calendário');
+  await page.getByRole('button',{name:'Semana',exact:true}).click();
+  await page.locator('.week-entry').filter({hasText:'Conferir relatório'}).waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  await nav('Projetos e metas');
+  await page.getByRole('button',{name:'Quadro',exact:true}).click();
+  await page.getByRole('combobox',{name:'Status de Conferir relatório'}).selectOption('doing');
+  await page.locator('[data-drop-status=doing]').getByText('Conferir relatório').waitFor();
+  await nav('Configurações');
+  await page.getByRole('button',{name:/Lixeira/}).click();
+  await page.getByRole('button',{name:'Restaurar',exact:true}).click();
+  await page.getByText('A lixeira está vazia.').waitFor();
+  await page.getByRole('button',{name:'Fechar',exact:true}).click();
+  await page.getByRole('button',{name:'Histórico de backups'}).click();
+  await page.getByRole('button',{name:'Prévia e restauração'}).waitFor();
   assert.deepEqual(errors,[]);
   console.log('PASS: all modules, persistence, export/restore, focus, safe text and minimum-size layout');
   fs.writeFileSync(path.join(artifacts,'result.json'),JSON.stringify({passed:true,errors,dataDir:dir},null,2));
