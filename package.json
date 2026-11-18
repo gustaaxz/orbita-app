@@ -1,0 +1,42 @@
+{
+  "name": "orbita-organizador",
+  "productName": "Órbita",
+  "version": "1.0.0",
+  "description": "Seu espaço para organizar os dias. Aplicativo pessoal offline para Windows.",
+  "author": "Organizador pessoal",
+  "private": true,
+  "main": "app/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/core.test.cjs",
+    "test:app": "node tests/app.test.cjs",
+    "build": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "playwright": "1.64.1"
+  },
+  "build": {
+    "appId": "br.local.orbita.organizador",
+    "productName": "Órbita",
+    "artifactName": "Orbita-Instalar-${version}.${ext}",
+    "directories": { "output": "dist", "buildResources": "assets" },
+    "files": ["app/**/*", "assets/icon.png", "assets/icon.ico", "package.json"],
+    "asar": true,
+    "win": { "target": "nsis", "icon": "assets/icon.ico", "signAndEditExecutable": true },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Órbita",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "include": "assets/installer.nsh",
+      "installerLanguages": ["pt_BR"],
+      "language": "1046"
+    }
+  }
+}
