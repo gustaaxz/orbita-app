@@ -9,7 +9,16 @@ const artifacts=path.join(__dirname,'artifacts');fs.mkdirSync(artifacts,{recursi
 const dir=fs.mkdtempSync(path.join(artifacts,'app-'));
 const env={...process.env,ORBITA_TEST:'1',ORBITA_DATA_DIR:dir};delete env.ELECTRON_RUN_AS_NODE;
 let app,page;const errors=[];
-async function launch(){app=await electron.launch({args:[root],env,cwd:root});page=await app.firstWindow();page.on('pageerror',e=>errors.push(e.message));await page.waitForSelector('#content');}
+async function launch(){
+  app=await electron.launch({args:[root],env,cwd:root});
+  page=await app.firstWindow();
+  page.on('pageerror',error=>errors.push(error.message));
+  try { await page.waitForSelector('#content'); }
+  catch(error) {
+    console.error('Janela do Órbita:', await page.locator('body').innerText(), errors);
+    throw error;
+  }
+}
 async function nav(label){await page.getByRole('button',{name:label,exact:true}).click();}
 async function create(label,kind,values){
   await page.getByRole('button',{name:label,exact:true}).click();

@@ -1,11 +1,11 @@
 'use strict';
 const $=s=>document.querySelector(s);
 const api=window.orbita;
+const { localDate, dateObject: dayObj } = window.orbitaDates;
 let db,page='today',q='',taskFilter='pending',projectFilter='',calendarMonth=new Date(),selectedDate=localDate(),habitOffset=0,financeMonth=localDate().slice(0,7),moneyFilter='all',saving=false;
 const paths={home:'m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z',tasks:'M9 5h12M9 12h12M9 19h12M2 5l1.5 1.5L6 3M2 12l1.5 1.5L6 10M2 19l1.5 1.5L6 17',calendar:'M4 5h16v16H4ZM4 10h16M8 3v4M16 3v4M8 14h2M14 14h2M8 17h2',projects:'M3 7h7l2-3h9v16H3ZM3 7V4h6l2 3',habits:'M20 5c-7-3-15 0-15 8a6 6 0 0 0 6 6c7 0 10-7 9-14ZM5 20l10-10',finance:'M3 6h18v14H3ZM3 6V4h15M16 11h5v5h-5a2.5 2.5 0 0 1 0-5Z',notes:'M5 3h10l4 4v14H5ZM14 3v5h5M8 12h8M8 16h6',focus:'M9 2h6M12 2v3M19 6l1-1M12 9v5l3 2M21 14a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',settings:'m9 3 6 0 .7 3 2.6 1.5 3 .1 1.7 5.2-2.4 1.8-1 2.8.7 2.8-4.5 3.2-2.4-1.7-3 0L7 23l-4.5-3.2.7-2.8-1-2.8L0 12.4l1.7-5.2 3-.1L7.3 6ZM16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',plus:'M12 5v14M5 12h14',check:'m5 12 4 4L19 6',arrow:'M5 12h14m-5-5 5 5-5 5',left:'m14 6-6 6 6 6',right:'m10 6 6 6-6 6',search:'M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',close:'m6 6 12 12M6 18 18 6',bell:'M5 17h14l-2-3V9a5 5 0 0 0-10 0v5ZM10 21h4',flag:'M5 21V3h12l-2 4 2 5H5',download:'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',upload:'M12 16V4m-5 5 5-5 5 5M4 16v5h16v-5',sun:'M12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10ZM12 1v2M12 21v2M1 12h2M21 12h2M4 4l2 2M18 18l2 2M4 20l2-2M18 6l2-2',clock:'M12 7v5l4 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z',trash:'M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7',spark:'m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z'};
 const icon=name=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]||paths.spark}"/></svg>`;
 function e(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-const { localDate, dateObject: dayObj } = window.orbitaDates;
 function fmtDate(s,opts={day:'2-digit',month:'short'}){return s?dayObj(s).toLocaleDateString('pt-BR',opts):'Sem prazo';}
 function money(cents){return (cents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 function number(n){return Number(n).toLocaleString('pt-BR');}
