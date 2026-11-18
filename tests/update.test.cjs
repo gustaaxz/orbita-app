@@ -13,7 +13,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { setTimeout: delay } = require('node:timers/promises');
 const { promisify } = require('node:util');
-const { extractFile } = require('@electron/asar');
+const { extractFile, uncache } = require('@electron/asar');
 const { _electron: electron } = require('playwright');
 const { version } = require('../package.json');
 
@@ -42,7 +42,11 @@ const feed = createServer((request, response) => {
   else fs.createReadStream(absolute).pipe(response);
 });
 
-const installedVersion = () => JSON.parse(extractFile(archive, 'package.json')).version;
+function installedVersion() {
+  // The installer replaces the archive at the same path.
+  uncache(archive);
+  return JSON.parse(extractFile(archive, 'package.json')).version;
+}
 let running;
 
 async function launch() {
